@@ -1,0 +1,11 @@
+title: certificate-updater
+description: Used to replace HTTPS certificates in projects
+stage: GA
+includedPermissions:
+  - compute.sslCertificates.create
+  - compute.sslCertificates.delete
+  - compute.sslCertificates.get
+  - compute.sslCertificates.list
+  - compute.targetHttpsProxies.get
+  - compute.targetHttpsProxies.list
+  - compute.targetHttpsProxies.setSslCertificates

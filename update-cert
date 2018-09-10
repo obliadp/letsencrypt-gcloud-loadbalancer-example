@@ -1,0 +1,73 @@
+#!/bin/bash
+
+set -e
+
+usage(){
+	cat <<EOF
+Environment variables needed:"
+
+        PROJECT:      the project where your loadbalancer lives
+
+        TARGET_PROXY: your intended target proxy. view list with
+                      'gcloud compute target-https-proxies list'
+EOF
+	exit 1
+}
+
+_fail(){
+	echo -e "$@\n\n"
+	usage
+}
+
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1
+GCLOUD_VERBOSITY=info
+
+# validate some env
+test -z $PROJECT && _fail "PROJECT not set"
+test -z $TARGET_PROXY && _fail "TARGET_PROXY not set"
+
+CERT=/opt/certs/tls.crt
+KEY=/opt/certs/tls.key
+SERVICEACCOUNT=/etc/secret/credentials.json
+PATH=./google-cloud-sdk/bin:${PATH}
+
+# check for certs
+stat $CERT &> /dev/null || _fail "no certificate present at $CERT"
+stat $KEY &> /dev/null  || _fail "no keyfile found at $KEY"
+stat $SERVICEACCOUNT &> /dev/null  || _fail "no serviceaccount found at $SERVICEACCOUNT"
+
+gcloud auth activate-service-account --key-file $SERVICEACCOUNT
+gcloud config set project $PROJECT
+gcloud config set core/verbosity $GCLOUD_VERBOSITY
+
+# Find name of current certificate
+OLD_CERT_ID=$(gcloud --quiet --project ${PROJECT} compute target-https-proxies list \
+	--filter "name=${TARGET_PROXY}" \
+	--format="value(sslCertificates.map().basename().list():label=SSL_CERTIFICATES)")
+# Fingerprint current certificate
+OLD_CERT_FINGERPRINT=$(gcloud --quiet --project ${PROJECT} \
+	compute ssl-certificates describe ${OLD_CERT_ID} \
+	--format json --format="value(certificate)" |\
+	openssl x509 -noout -fingerprint -sha256 -inform pem)
+	# SHA256 Fingerprint=C7:72:44:DD:B4:00:55:A5:67:0F:39:BE:15:3F:C5:39:F7:67:A8:AF:45:36:F4:A1:5A:D7:7C:1C:53:8D:C5:68
+
+# Fingerprint potential replacement certificate
+NEW_CERT_FINGERPRINT=$(cat ${CERT} | openssl x509 -noout -fingerprint -sha256 -inform pem)
+
+if [[ "${NEW_CERT_FINGERPRINT}" = "${OLD_CERT_FINGERPRINT}" ]]; then
+	echo "New and old fingerprint matches. Doing nothing."
+	exit 0
+fi
+
+# Create a random name for new certificate in gcloud
+NEW_CERT_ID=$(date --iso)-$(cat /dev/urandom | tr -dc 'a-z' | fold -w 16 | head -n 1)-cert
+
+# Generate new gcloud certificate and attach to https proxy
+gcloud --quiet --project ${PROJECT} compute ssl-certificates create $NEW_CERT_ID --certificate=${CERT} --private-key=${KEY} || true
+gcloud --quiet --project ${PROJECT} compute target-https-proxies update $TARGET_PROXY --ssl-certificates $NEW_CERT_ID
+
+# THIS IS POTENTIALLY DESTRUCTIVE
+# Remove old, unused certificate
+# Make sure you have individual certificate names for each target.
+gcloud --quiet --project ${PROJECT} compute ssl-certificates delete $OLD_CERT_ID
+

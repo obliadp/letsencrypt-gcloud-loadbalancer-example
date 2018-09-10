@@ -1,0 +1,42 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: some-target
+  namespace: letsencrypt-gcloud-balancer
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: job
+              env:
+                - name: PROJECT
+                  value: generic-project
+                - name: TARGET_PROXY
+                  value: some-target
+              image: {{ env "IMAGE" }}
+              imagePullPolicy: IfNotPresent
+              command: ['/opt/update-cert']
+              volumeMounts:
+                - name: service-auth-mounted
+                  mountPath: /etc/secret
+                  readOnly: true
+                - name: cert
+                  mountPath: /opt/certs
+                  readOnly: true
+          volumes:
+            - name: service-auth-mounted
+              secret:
+                secretName: service-auth-mounted
+            - name: cert
+              secret:
+                secretName: wilcard-example-com-tls
+  schedule: '30 12 * * 1' # mondays 12:30
+  startingDeadlineSeconds: 100
+  successfulJobsHistoryLimit: 1
+  suspend: false
